@@ -14,6 +14,10 @@ We deliberately chose **Tauri v2** over Electron to respect your system's resour
 
 On the frontend, we stripped away complex frameworks. The interface is built with **Vanilla TypeScript**, ensuring that every interaction—from the fluid 60fps audio visualizer to the glass-morphism UI—responds instantly. The result is a specialized tool that feels native, robust, and incredibly fast.
 
+### Network Infrastructure
+
+To maintain total control over your data, the signaling server—responsible for the initial handshake between peers—is not included in this distribution. Pulse is designed to be agnostic; you can deploy your own lightweight WebSocket relay (e.g., via serverless functions or a dedicated instance) to facilitate peer discovery. This ensures the entire communication pipeline remains under your authority.
+
 ### Getting Started
 
 To build Pulse from source, you need a Rust environment and Node.js.

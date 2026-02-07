@@ -16,7 +16,8 @@
         "title": "Pulse.",
         "width": 1200,
         "height": 700,
-        "decorations": false
+        "decorations": false,
+        "devtools": false
       }
     ],
     "security": {

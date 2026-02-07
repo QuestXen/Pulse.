@@ -4,10 +4,11 @@ import './styles/main.css';
 import * as api from './services/tauri-api';
 import type { Contact, IncomingCallEvent } from './types';
 import { createLoginScreen } from './components/LoginScreen';
-import { createContactList, updateContactStatus } from './components/ContactList';
+import { createContactList } from './components/ContactList';
 import { createAddContactModal } from './components/AddContactModal';
 import { createIncomingCallOverlay, IncomingCallData } from './components/IncomingCall';
 import { createCallScreen } from './components/CallScreen';
+import { showContextMenu } from './components/ContextMenu';
 
 let reconnectInterval: number | null = null;
 
@@ -82,22 +83,35 @@ function renderMainScreen() {
   sidebar.innerHTML = `
     <div class="sidebar-header">
       <h2 class="sidebar-title">Contacts</h2>
-      <button class="btn btn-icon" id="add-contact-btn" title="Add Contact">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+      <button class="action-btn-small" id="add-contact-btn" title="Add Contact">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
       </button>
     </div>
+    
     <div class="sidebar-content" id="sidebar-content"></div>
-    <div class="sidebar-footer">
-      <div class="user-info">
-        <div class="user-avatar">${getInitials(state.username || '')}</div>
-        <div class="user-details">
-          <div class="user-name">${escapeHtml(state.username || '')}</div>
-          <div class="user-status">Online</div>
+    
+    <!-- New User Profile Dock -->
+    <div class="user-profile-dock">
+      <div class="user-card-glass">
+        <div class="avatar-wrapper">
+          <div class="user-avatar-new">${getInitials(state.username || '')}</div>
+          <div class="status-dot"></div>
+        </div>
+        
+        <div class="user-info-text">
+          <div class="user-name-display" title="${escapeHtml(state.username || '')}">${escapeHtml(state.username || '')}</div>
+          <div class="user-id-display" id="copy-id-btn" title="Click to copy ID">
+             <span>${state.username ? '@' + state.username : '...'}</span>
+             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.7"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </div>
+        </div>
+
+        <div class="user-actions">
+           <button class="action-btn-small" id="logout-btn" title="Logout">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+           </button>
         </div>
       </div>
-      <button class="btn btn-icon" id="logout-btn" title="Logout">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-      </button>
     </div>
   `;
   
@@ -128,6 +142,20 @@ function renderMainScreen() {
   
   const logoutBtn = sidebar.querySelector('#logout-btn') as HTMLButtonElement;
   logoutBtn.addEventListener('click', logout);
+
+  // Copy ID Logic
+  const copyBtn = sidebar.querySelector('#copy-id-btn') as HTMLElement;
+  copyBtn.addEventListener('click', () => {
+    if (state.username) {
+        navigator.clipboard.writeText(state.username).then(() => {
+            const originalText = copyBtn.innerHTML;
+            copyBtn.innerHTML = '<span style="color: var(--color-online)">Copied!</span>';
+            setTimeout(() => {
+                copyBtn.innerHTML = originalText;
+            }, 2000);
+        });
+    }
+  });
 }
 
 function renderContactList() {
@@ -139,6 +167,46 @@ function renderContactList() {
   const contactList = createContactList(state.contacts, {
     onCallContact: startCall,
     onAddContact: showAddContactModal,
+    onContextMenu: (contact, x, y) => {
+        const items = [
+            {
+                label: 'Call',
+                icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>',
+                action: () => startCall(contact),
+                // Disable if offline? context menu action handles logic or we can pass disabled prop if we add it
+            },
+            {
+                label: 'Copy ID',
+                icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
+                action: () => {
+                    navigator.clipboard.writeText(contact.peer_id);
+                    // Minimal feedback?
+                }
+            },
+            {
+                label: 'Remove Contact',
+                danger: true,
+                icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>',
+                action: async () => {
+                   if(confirm(`Remove ${contact.display_name || contact.username}?`)) {
+                       try {
+                           await api.deleteContact(contact.peer_id);
+                           state.contacts = state.contacts.filter(c => c.peer_id !== contact.peer_id);
+                           renderContactList();
+                       } catch (e) {
+                           console.error(e);
+                           alert('Failed to remove contact');
+                       }
+                   } 
+                }
+            }
+        ];
+        
+        // Filter actions based on status?
+        // e.g. if offline, maybe verify call action behavior (startCall connects anyway)
+        
+        showContextMenu(x, y, items);
+    }
   });
   
   sidebarContent.appendChild(contactList);
@@ -277,7 +345,7 @@ function setupEventListeners() {
     const contact = state.contacts.find(c => c.peer_id === peerId);
     if (contact) {
       contact.is_online = true;
-      updateContactStatus(peerId, true);
+      renderContactList();
     }
   });
   
@@ -285,7 +353,7 @@ function setupEventListeners() {
     const contact = state.contacts.find(c => c.peer_id === peerId);
     if (contact) {
       contact.is_online = false;
-      updateContactStatus(peerId, false);
+      renderContactList();
     }
   });
   
@@ -302,10 +370,13 @@ function setupEventListeners() {
     console.warn('Disconnected from signaling server');
     
     // Update UI
-    const userStatus = document.querySelector('.user-status') as HTMLElement | null;
-    if (userStatus) {
-      userStatus.textContent = 'Offline (Reconnecting...)';
-      userStatus.style.color = '#ef4444'; // Red
+    const statusDot = document.querySelector('.user-profile-dock .status-dot') as HTMLElement | null;
+    const userIdText = document.querySelector('.user-id-display span') as HTMLElement | null;
+    
+    if (statusDot) statusDot.style.background = 'var(--color-busy)'; // Red
+    if (userIdText) {
+        userIdText.textContent = 'Reconnecting...';
+        userIdText.parentElement!.style.color = 'var(--color-busy)';
     }
 
     // Start auto-reconnect
@@ -322,10 +393,13 @@ function setupEventListeners() {
           console.log('Reconnected successfully');
           stopReconnect();
           
-          const userStatus = document.querySelector('.user-status') as HTMLElement | null;
-          if (userStatus) {
-            userStatus.textContent = 'Online';
-            userStatus.style.color = ''; // Reset
+          const statusDot = document.querySelector('.user-profile-dock .status-dot') as HTMLElement | null;
+          const userIdText = document.querySelector('.user-id-display span') as HTMLElement | null;
+          
+          if (statusDot) statusDot.style.background = 'var(--color-online)'; // Green
+          if (userIdText) {
+             userIdText.textContent = state.username ? '@' + state.username : '...';
+             userIdText.parentElement!.style.color = ''; // Reset
           }
         } catch (error) {
           console.error('Reconnect attempt failed:', error);
@@ -396,6 +470,12 @@ async function init() {
   // Show login screen
   renderLoginScreen();
 }
+
+// Disable context menu
+document.oncontextmenu = (e) => {
+  e.preventDefault();
+  return false;
+};
 
 // Start the app
 init().catch(console.error);

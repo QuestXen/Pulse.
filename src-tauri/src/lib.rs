@@ -516,8 +516,40 @@ pub fn run() {
         .unwrap_or_else(|_| "https://call-app-signaling.questxen.workers.dev".to_string());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = app
+                .get_webview_window("main")
+                .expect("no main window")
+                .set_focus();
+        }))
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    // Start of context menu disabling
+                    window
+                        .with_webview(move |_webview| {
+                            #[cfg(target_os = "windows")]
+                            {
+                                // Requires 'webview2-com' crate for Windows-specific bindings
+                                // unsafe {
+                                //     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings;
+                                //     let core = webview.controller().CoreWebView2().unwrap();
+                                //     let settings: ICoreWebView2Settings = core.Settings().unwrap();
+                                //     let _ = settings.SetAreDefaultContextMenusEnabled(0);
+                                // }
+
+                                // NOTE: Since we might not have webview2-com in Cargo.toml yet,
+                                // we keep this commented out to prevent build errors.
+                                // The Javascript 'document.oncontextmenu' fix in main.ts is the primary fix for now.
+                            }
+                        })
+                        .expect("failed to execute with_webview");
+                }
+            }
+
             // App State initialisieren
             let state =
                 AppState::init(signaling_url.clone()).expect("Failed to initialize app state");

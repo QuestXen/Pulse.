@@ -28,3 +28,6 @@ src-tauri/target
 
 #cloudflare worker
 cloudflare-worker/
+
+#docs
+docs/

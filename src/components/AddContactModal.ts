@@ -25,37 +25,39 @@ export function createAddContactModal(callbacks: AddContactModalCallbacks): HTML
       
       <div class="modal-body">
         <div class="input-group">
-          <label class="input-label" for="search-username">Search by Username</label>
-          <input 
-            type="text" 
-            id="search-username" 
-            class="input-field" 
-            placeholder="e.g. alice_123"
-            autocomplete="off"
-            spellcheck="false"
-          />
+          <label class="input-label" for="search-username">USERNAME</label>
+          <div class="search-input-wrapper">
+             <svg class="search-icon-inside" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+             <input 
+               type="text" 
+               id="search-username" 
+               class="input-field search" 
+               placeholder="Search by username..."
+               autocomplete="off"
+               spellcheck="false"
+             />
+          </div>
         </div>
         
-        <div id="search-result" class="hidden"></div>
-        <div id="search-error" class="error-message hidden"></div>
+        <div id="search-result" class="search-result-container hidden"></div>
+        <div id="search-error" class="error-message hidden" style="color: var(--color-danger); font-size: 13px; margin-top: 8px;"></div>
       </div>
       
       <div class="modal-footer">
-        <button class="btn btn-secondary" id="cancel-btn">Cancel</button>
-        <button class="btn btn-primary" id="search-btn">Search</button>
+        <!-- Buttons removed from footer, action is inline -->
       </div>
     </div>
   `;
 
   // Elements
   const closeBtn = overlay.querySelector('#modal-close-btn') as HTMLButtonElement;
-  const cancelBtn = overlay.querySelector('#cancel-btn') as HTMLButtonElement;
-  const searchBtn = overlay.querySelector('#search-btn') as HTMLButtonElement;
+  // const cancelBtn = overlay.querySelector('#cancel-btn') as HTMLButtonElement; // Removed
+  // const searchBtn = overlay.querySelector('#search-btn') as HTMLButtonElement; // Removed
   const searchInput = overlay.querySelector('#search-username') as HTMLInputElement;
   const resultDiv = overlay.querySelector('#search-result') as HTMLDivElement;
   const errorDiv = overlay.querySelector('#search-error') as HTMLDivElement;
 
-  let foundUser: UserFoundEvent | null = null;
+  /* Removed unused foundUser variable */
 
   // Close handlers
   function close() {
@@ -68,29 +70,34 @@ export function createAddContactModal(callbacks: AddContactModalCallbacks): HTML
   });
 
   closeBtn.addEventListener('click', close);
-  cancelBtn.addEventListener('click', close);
-
+  
   // ESC to close
   function handleEsc(e: KeyboardEvent) {
     if (e.key === 'Escape') close();
   }
   document.addEventListener('keydown', handleEsc);
 
-  // Search
-  async function search() {
-    const username = searchInput.value.trim();
-    if (!username) return;
+  // Search logic (debounced)
+  let searchTimeout: number;
 
-    searchBtn.disabled = true;
-    searchBtn.textContent = 'Searching...';
-    resultDiv.classList.add('hidden');
-    errorDiv.classList.add('hidden');
-    resultDiv.innerHTML = '';
+  function handleSearchInput() {
+      const username = searchInput.value.trim();
+      
+      clearTimeout(searchTimeout);
+      resultDiv.classList.add('hidden');
+      errorDiv.classList.add('hidden');
+      
+      if (username.length < 3) return;
 
+      searchTimeout = window.setTimeout(() => {
+          performSearch(username);
+      }, 500);
+  }
+
+  async function performSearch(username: string) {
     try {
       // Set up listener for response
       const unlistenFound = await api.onUserFound((user) => {
-        foundUser = user;
         showResult(user);
         unlistenFound();
         unlistenNotFound();
@@ -101,46 +108,38 @@ export function createAddContactModal(callbacks: AddContactModalCallbacks): HTML
         unlistenFound();
         unlistenNotFound();
       });
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        unlistenFound();
-        unlistenNotFound();
-        if (!foundUser && searchBtn.disabled) { // only if still searching
-          showError('Search timed out.');
-           searchBtn.disabled = false;
-           searchBtn.textContent = 'Search';
-        }
-      }, 10000);
+      
+      // Auto-cleanup timeout
+       setTimeout(() => {
+           unlistenFound();
+           unlistenNotFound();
+       }, 5000);
 
       await api.findUser(username);
     } catch (error) {
-      showError(error instanceof Error ? error.message : String(error));
-       searchBtn.disabled = false;
-       searchBtn.textContent = 'Search';
+       showError(error instanceof Error ? error.message : String(error));
     } 
   }
 
+  // ... (showResult, showError, addContact functions remain the same) ...
+
   function showResult(user: UserFoundEvent) {
-    searchBtn.disabled = false;
-    searchBtn.textContent = 'Search';
-    
     // Check if duplicate
     const isDuplicate = callbacks.existingContacts.some(c => c.peer_id === user.peer_id || c.username === user.username);
+    const initials = getInitials(user.username);
 
     resultDiv.innerHTML = `
-      <div class="search-result">
-        <div class="contact-avatar">
-          ${getInitials(user.username)}
+      <div class="search-result-item">
+        <div class="result-avatar">
+          ${initials}
         </div>
-        <div class="search-result-info">
-          <div class="search-result-name">@${escapeHtml(user.username)}</div>
-          <div class="search-result-status">${user.is_online ? 'Online' : 'Offline'}</div>
+        <div class="result-info">
+          <div class="result-name">@${escapeHtml(user.username)}</div>
+          <div class="result-status">${user.is_online ? 'Online' : 'Offline'}</div>
         </div>
-        ${isDuplicate 
-          ? `<button class="btn btn-secondary" disabled>Added</button>`
-          : `<button class="btn btn-primary" id="add-btn">Add</button>`
-        }
+        <button class="add-user-btn" id="add-btn" ${isDuplicate ? 'disabled' : ''}>
+            ${isDuplicate ? 'Added' : 'Add'}
+        </button>
       </div>
     `;
     resultDiv.classList.remove('hidden');
@@ -154,13 +153,16 @@ export function createAddContactModal(callbacks: AddContactModalCallbacks): HTML
   function showError(message: string) {
     errorDiv.textContent = message;
     errorDiv.classList.remove('hidden');
-    // Ensure button is reset
-    searchBtn.disabled = false;
-    searchBtn.textContent = 'Search';
   }
 
   async function addContact(user: UserFoundEvent) {
     try {
+      const btn = resultDiv.querySelector('#add-btn') as HTMLButtonElement;
+      if(btn) {
+          btn.textContent = 'Adding...';
+          btn.disabled = true;
+      }
+      
       const contact = await api.addContact({
         peer_id: user.peer_id,
         username: user.username,
@@ -172,14 +174,9 @@ export function createAddContactModal(callbacks: AddContactModalCallbacks): HTML
     }
   }
 
-  searchBtn.addEventListener('click', search);
-  searchInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      search();
-    }
-  });
-
+  // Re-attach listener
+  searchInput.addEventListener('input', handleSearchInput);
+  
   // Focus input
   setTimeout(() => searchInput.focus(), 100);
 

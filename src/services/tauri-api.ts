@@ -69,6 +69,10 @@ export async function updateContactName(peerId: string, displayName: string | nu
   return await invoke('update_contact_name', { peerId, displayName });
 }
 
+export async function refreshContactStatuses(): Promise<void> {
+  return await invoke('refresh_contact_statuses');
+}
+
 // ============================================================================
 // CALLS
 // ============================================================================
@@ -103,6 +107,19 @@ export async function isMuted(): Promise<boolean> {
 
 export async function getAudioLevels(): Promise<[number, number]> {
   return await invoke('get_audio_levels');
+}
+
+// ============================================================================
+// AUDIO SETTINGS
+// ============================================================================
+
+interface AudioDevice {
+  name: string;
+  is_default: boolean;
+}
+
+export async function getAudioDevices(): Promise<[AudioDevice[], AudioDevice[]]> {
+  return await invoke('get_audio_devices');
 }
 
 // ============================================================================

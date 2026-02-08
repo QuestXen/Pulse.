@@ -10,4 +10,4 @@ mod audio;
 mod engine;
 
 pub use audio::{AudioError, AudioHandler, FRAME_SIZE, SAMPLE_RATE};
-pub use engine::{CallEngine, CallEngineError, CallState};
+pub use engine::{CallEngine, CallEngineError, CallEvent, CallState};

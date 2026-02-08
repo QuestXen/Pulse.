@@ -9,6 +9,7 @@ import { createAddContactModal } from './components/AddContactModal';
 import { createIncomingCallOverlay, IncomingCallData } from './components/IncomingCall';
 import { createCallScreen } from './components/CallScreen';
 import { showContextMenu } from './components/ContextMenu';
+import { createSettingsModal } from './components/SettingsModal';
 
 let reconnectInterval: number | null = null;
 
@@ -63,6 +64,14 @@ function renderLoginScreen() {
       state.peerId = peerId;
       await loadContacts();
       renderMainScreen();
+      
+      // Nach dem Login den Status aller Kontakte abfragen
+      // Das passiert asynchron im Hintergrund
+      try {
+        await api.refreshContactStatuses();
+      } catch (e) {
+        console.warn('Failed to refresh contact statuses:', e);
+      }
     }
   });
   
@@ -107,6 +116,9 @@ function renderMainScreen() {
         </div>
 
         <div class="user-actions">
+           <button class="action-btn-small" id="settings-btn" title="Settings">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+           </button>
            <button class="action-btn-small" id="logout-btn" title="Logout">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
            </button>
@@ -142,6 +154,9 @@ function renderMainScreen() {
   
   const logoutBtn = sidebar.querySelector('#logout-btn') as HTMLButtonElement;
   logoutBtn.addEventListener('click', logout);
+  
+  const settingsBtn = sidebar.querySelector('#settings-btn') as HTMLButtonElement;
+  settingsBtn.addEventListener('click', showSettingsModal);
 
   // Copy ID Logic
   const copyBtn = sidebar.querySelector('#copy-id-btn') as HTMLElement;
@@ -258,6 +273,14 @@ function showAddContactModal() {
   document.body.appendChild(modal);
 }
 
+function showSettingsModal() {
+  const modal = createSettingsModal({
+    onClose: () => {}
+  });
+  
+  document.body.appendChild(modal);
+}
+
 async function startCall(contact: Contact) {
   try {
     await api.startCall(contact.peer_id);
@@ -353,6 +376,15 @@ function setupEventListeners() {
     const contact = state.contacts.find(c => c.peer_id === peerId);
     if (contact) {
       contact.is_online = false;
+      renderContactList();
+    }
+  });
+  
+  // User found (response to find_user, used for status refresh)
+  api.onUserFound((event) => {
+    const contact = state.contacts.find(c => c.peer_id === event.peer_id);
+    if (contact && contact.is_online !== event.is_online) {
+      contact.is_online = event.is_online;
       renderContactList();
     }
   });

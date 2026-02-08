@@ -8,11 +8,13 @@
 
 use super::audio::{AudioError, AudioHandler, SAMPLE_RATE};
 use parking_lot::Mutex;
+use std::net::IpAddr;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::ice_transport::ice_server::RTCIceServer;
@@ -81,10 +83,25 @@ pub enum CallEvent {
 // ICE SERVER CONFIGURATION
 // ============================================================================
 
-/// Standard STUN/TURN Server Konfiguration
+/// Standard STUN Server Konfiguration mit IPv6-Support
+///
+/// Diese STUN-Server unterstützen sowohl IPv4 als auch IPv6 (Dual-Stack).
+/// Sie ermöglichen NAT-Traversal für die meisten Verbindungen (~80-90%).
 pub fn default_ice_servers() -> Vec<RTCIceServer> {
     vec![
-        // Google STUN Server (kostenlos, für ~90% der Verbindungen)
+        // Primäre STUN-Server mit IPv6-Support
+        RTCIceServer {
+            urls: vec![
+                // Nextcloud - Top-Empfehlung, sehr zuverlässig, Port 443 (firewall-freundlich)
+                "stun:stun.nextcloud.com:443".to_string(),
+                // FreeSWITCH - Bekannter VoIP-Server mit gutem Dual-Stack Support
+                "stun:stun.freeswitch.org:3478".to_string(),
+                // Stunprotocol.org - Zuverlässiger öffentlicher STUN-Server
+                "stun:stun.stunprotocol.org:3478".to_string(),
+            ],
+            ..Default::default()
+        },
+        // Backup STUN-Server (Google IPv4)
         RTCIceServer {
             urls: vec![
                 "stun:stun.l.google.com:19302".to_string(),
@@ -386,10 +403,72 @@ impl CallEngine {
         registry = register_default_interceptors(registry, &mut media_engine)
             .map_err(|e| CallEngineError::WebRTC(e.to_string()))?;
 
-        // API erstellen
+        // Setting Engine für Netzwerk-Konfiguration
+        let mut setting_engine = SettingEngine::default();
+
+        // Interface-Filter: Exclude virtual adapters and problematic interfaces
+        setting_engine.set_interface_filter(Box::new(|interface_name: &str| {
+            let name_lower = interface_name.to_lowercase();
+
+            // Exclude virtual and problematic interfaces
+            let excluded = [
+                "hyper-v",
+                "vmware",
+                "virtualbox",
+                "docker",
+                "vethernet",
+                "bluetooth",
+                "loopback",
+                "teredo",
+                "isatap",
+                "6to4",
+            ];
+
+            for pattern in excluded {
+                if name_lower.contains(pattern) {
+                    tracing::debug!("Excluding interface: {}", interface_name);
+                    return false;
+                }
+            }
+
+            true
+        }));
+
+        // IP-Filter: Only use valid, routable IP addresses
+        setting_engine.set_ip_filter(Box::new(|ip: IpAddr| {
+            match ip {
+                IpAddr::V4(ipv4) => {
+                    // Exclude link-local (169.254.x.x) and loopback
+                    if ipv4.is_link_local() || ipv4.is_loopback() {
+                        return false;
+                    }
+                    // Exclude APIPA addresses
+                    let octets = ipv4.octets();
+                    if octets[0] == 169 && octets[1] == 254 {
+                        return false;
+                    }
+                    true
+                }
+                IpAddr::V6(ipv6) => {
+                    // Exclude link-local (fe80::) and loopback IPv6
+                    if ipv6.is_loopback() {
+                        return false;
+                    }
+                    // Exclude link-local IPv6 (starts with fe80)
+                    let segments = ipv6.segments();
+                    if segments[0] == 0xfe80 {
+                        return false;
+                    }
+                    true
+                }
+            }
+        }));
+
+        // API erstellen mit SettingEngine
         let api = APIBuilder::new()
             .with_media_engine(media_engine)
             .with_interceptor_registry(registry)
+            .with_setting_engine(setting_engine)
             .build();
 
         // RTCConfiguration mit ICE Servern

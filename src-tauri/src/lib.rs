@@ -11,7 +11,7 @@ pub mod crypto;
 pub mod database;
 pub mod signaling;
 
-use call_engine::{CallEngine, CallState};
+use call_engine::{CallEngine, CallEvent, CallState};
 use crypto::KeyPair;
 use database::{Contact, ContactsDatabase, NewContact};
 use once_cell::sync::OnceCell;
@@ -143,6 +143,89 @@ async fn connect_and_register(
     // Client speichern
     *state.signaling.write() = Some(client);
 
+    // Call Engine Event Handler starten für ICE Candidates
+    let mut call_event_rx = state.call_engine.subscribe();
+    let signaling_ref = Arc::clone(&state.signaling);
+    let app_handle_clone = app_handle.clone();
+    let call_engine_ref = Arc::clone(&state.call_engine);
+
+    tokio::spawn(async move {
+        while let Ok(event) = call_event_rx.recv().await {
+            match event {
+                CallEvent::IceCandidate { candidate } => {
+                    tracing::debug!("Sending ICE candidate to peer");
+
+                    // Peer ID aus dem Call-State holen
+                    let target_peer_id = match call_engine_ref.state() {
+                        CallState::Calling { peer_id } => Some(peer_id),
+                        CallState::Connecting { peer_id } => Some(peer_id),
+                        CallState::Connected { peer_id } => Some(peer_id),
+                        CallState::Ringing { peer_id, .. } => Some(peer_id),
+                        _ => None,
+                    };
+
+                    if let Some(target_peer_id) = target_peer_id {
+                        // ICE Candidate über Signaling senden
+                        let signaling = signaling_ref.read();
+                        if let Some(ref client) = *signaling {
+                            if let Err(e) = client
+                                .send_ice_candidate_sync(target_peer_id.clone(), candidate.clone())
+                            {
+                                tracing::error!("Failed to send ICE candidate: {}", e);
+                            }
+                        }
+                    }
+
+                    // Auch ans Frontend senden für Debugging
+                    let _ = app_handle_clone.emit("call:ice_candidate", &candidate);
+                }
+                CallEvent::StateChanged(new_state) => {
+                    tracing::info!("Call state changed: {:?}", new_state);
+                    let _ = app_handle_clone.emit(
+                        "call:state_changed",
+                        serde_json::to_string(&format!("{:?}", new_state)).unwrap_or_default(),
+                    );
+                }
+                CallEvent::Error(err) => {
+                    tracing::error!("Call error: {}", err);
+                    let _ = app_handle_clone.emit("call:error", &err);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Heartbeat-Task starten, um WebSocket-Verbindung aufrechtzuerhalten
+    // Cloudflare Workers hat einen Idle-Timeout, daher müssen wir regelmäßig Heartbeats senden
+    let signaling_ref = Arc::clone(&state.signaling);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(25));
+        loop {
+            interval.tick().await;
+
+            let should_continue = {
+                let signaling = signaling_ref.read();
+                if let Some(client) = signaling.as_ref() {
+                    if client.is_connected() {
+                        // Heartbeat senden (synchron um den Lock nicht zu lange zu halten)
+                        let _ = client.send_heartbeat_sync();
+                        true
+                    } else {
+                        tracing::info!("Heartbeat: Client disconnected, stopping heartbeat task");
+                        false
+                    }
+                } else {
+                    tracing::info!("Heartbeat: No client, stopping heartbeat task");
+                    false
+                }
+            };
+
+            if !should_continue {
+                break;
+            }
+        }
+    });
+
     tracing::info!("Registered with peer_id: {}", peer_id);
     Ok(peer_id)
 }
@@ -223,6 +306,39 @@ async fn update_contact_name(
         .database
         .set_display_name(&peer_id, display_name.as_deref())
         .map_err(|e| e.to_string())
+}
+
+/// Fragt den Online-Status aller Kontakte beim Server ab
+/// Sollte nach dem Login aufgerufen werden
+#[tauri::command]
+async fn refresh_contact_statuses(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    tracing::info!("Refreshing contact statuses...");
+
+    // Hole alle Kontakte aus der Datenbank
+    let contacts = state
+        .database
+        .get_all_contacts()
+        .map_err(|e| e.to_string())?;
+
+    // Für jeden Kontakt eine find_user Anfrage senden (über username)
+    let signaling = state.signaling.read();
+    let client = signaling.as_ref().ok_or("Not connected")?;
+
+    if !client.is_connected() {
+        return Err("Not connected".to_string());
+    }
+
+    for contact in contacts {
+        // find_user sendet eine Anfrage an den Server
+        // Das Ergebnis kommt als SignalingEvent::UserFound zurück
+        // und wird dann in handle_signaling_event verarbeitet
+        if let Err(e) = client.find_user_sync(contact.username.clone()) {
+            tracing::warn!("Failed to refresh status for {}: {}", contact.username, e);
+        }
+    }
+
+    tracing::info!("Contact status refresh requests sent");
+    Ok(())
 }
 
 // ============================================================================
@@ -376,6 +492,52 @@ async fn get_audio_levels(state: State<'_, Arc<AppState>>) -> Result<(f32, f32),
 }
 
 // ============================================================================
+// TAURI COMMANDS - AUDIO SETTINGS
+// ============================================================================
+
+/// Repräsentiert ein Audio-Gerät
+#[derive(serde::Serialize)]
+struct AudioDevice {
+    name: String,
+    is_default: bool,
+}
+
+/// Gibt alle verfügbaren Audio-Geräte zurück
+#[tauri::command]
+async fn get_audio_devices() -> Result<(Vec<AudioDevice>, Vec<AudioDevice>), String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+
+    let host = cpal::default_host();
+
+    let default_input = host.default_input_device().and_then(|d| d.name().ok());
+    let default_output = host.default_output_device().and_then(|d| d.name().ok());
+
+    let input_devices: Vec<AudioDevice> = host
+        .input_devices()
+        .map_err(|e| e.to_string())?
+        .filter_map(|d| {
+            d.name().ok().map(|name| AudioDevice {
+                is_default: Some(&name) == default_input.as_ref(),
+                name,
+            })
+        })
+        .collect();
+
+    let output_devices: Vec<AudioDevice> = host
+        .output_devices()
+        .map_err(|e| e.to_string())?
+        .filter_map(|d| {
+            d.name().ok().map(|name| AudioDevice {
+                is_default: Some(&name) == default_output.as_ref(),
+                name,
+            })
+        })
+        .collect();
+
+    Ok((input_devices, output_devices))
+}
+
+// ============================================================================
 // EVENT HANDLER
 // ============================================================================
 
@@ -410,6 +572,8 @@ async fn handle_signaling_event(
 
         SignalingEvent::UserFound(contact) => {
             tracing::info!("User found: {:?}", contact);
+            // Update the online status in the database
+            let _ = database.set_online_status(&contact.peer_id, contact.is_online);
             let _ = app_handle.emit("signaling:user_found", &contact);
         }
 
@@ -573,6 +737,7 @@ pub fn run() {
             add_contact,
             delete_contact,
             update_contact_name,
+            refresh_contact_statuses,
             // Calls
             start_call,
             accept_call,
@@ -582,6 +747,8 @@ pub fn run() {
             set_muted,
             is_muted,
             get_audio_levels,
+            // Audio Settings
+            get_audio_devices,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

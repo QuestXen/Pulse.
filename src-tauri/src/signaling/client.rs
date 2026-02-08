@@ -317,6 +317,13 @@ impl SignalingClient {
         self.send_signed_message(payload).await
     }
 
+    /// Sendet einen Heartbeat synchron (non-blocking)
+    pub fn send_heartbeat_sync(&self) -> Result<(), SignalingError> {
+        let peer_id = self.peer_id().ok_or(SignalingError::NotConnected)?;
+        let payload = HeartbeatPayload::new(peer_id);
+        self.send_signed_message_sync(payload)
+    }
+
     /// Gibt den Sender zurück (für thread-safe Zugriff)
     pub fn get_sender(&self) -> Option<mpsc::Sender<String>> {
         self.tx.clone()
@@ -362,6 +369,17 @@ impl SignalingClient {
     pub fn hangup_sync(&self, to_peer_id: String) -> Result<(), SignalingError> {
         let peer_id = self.peer_id().ok_or(SignalingError::NotConnected)?;
         let payload = HangupPayload::new(peer_id, to_peer_id);
+        self.send_signed_message_sync(payload)
+    }
+
+    /// Sendet einen ICE Candidate synchron
+    pub fn send_ice_candidate_sync(
+        &self,
+        to_peer_id: String,
+        candidate: String,
+    ) -> Result<(), SignalingError> {
+        let peer_id = self.peer_id().ok_or(SignalingError::NotConnected)?;
+        let payload = IceCandidatePayload::new(peer_id, to_peer_id, candidate);
         self.send_signed_message_sync(payload)
     }
 
